@@ -13,7 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Untitled site',
+  title: 'Cash Crates — Free AI Photo Studio',
+  description: 'Add AI-generated crates of cash beside someone in a photo. Free shared GPU, no sign-up, and controlled edits that preserve the rest of your image.',
 };
 
 export default function RootLayout({
