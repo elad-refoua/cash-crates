@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { type Area, type Protection, DEFAULT_AREA, composite, generateCash, loadImage, makeMask, protectPerson, toBlob } from '@/lib/editor';
+import { FluxServiceError } from '@/lib/flux-protocol';
 
 export default function Home() {
   const [source, setSource] = useState('./demo-before.png');
@@ -20,6 +21,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+  const [errorKind, setErrorKind] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -56,7 +58,7 @@ export default function Home() {
   useEffect(() => () => { currentJob.current?.abort(); if (sourceUrl.current) URL.revokeObjectURL(sourceUrl.current); if (resultUrl.current) URL.revokeObjectURL(resultUrl.current); }, []);
   async function chooseFile(file?: File) {
     if (!file || busy) return;
-    setError('');
+    setError(''); setErrorKind('');
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('Please choose a JPG, PNG, or WebP image. HEIC photos need to be exported as JPG first.'); return; }
     if (file.size > 15 * 1024 * 1024) { setError('This photo is too large. Please use a file smaller than 15 MB.'); return; }
     const url = URL.createObjectURL(file);
@@ -76,8 +78,9 @@ export default function Home() {
   }
   async function generate() {
     if (busy || !original.current) return;
+    setErrorKind('');
     if (protect && !protectionReady) { setError(protectionFailed ? 'Automatic person protection is unavailable. Try reloading, or turn it off and keep the edit area clear of the person.' : 'Person protection is still loading. Please wait a moment.'); return; }
-    setError(''); setBusy(true); setStatus('Preparing the edit area…');
+    setError(''); setErrorKind(''); setBusy(true); setStatus('Preparing the edit area…');
     const controller = new AbortController(); currentJob.current = controller;
     const timer = setTimeout(() => controller.abort('timeout'), 240000);
     try {
@@ -95,6 +98,7 @@ export default function Home() {
       } finally { URL.revokeObjectURL(generatedUrl); }
       setStatus('Your image is ready.');
     } catch (e) {
+      setErrorKind(e instanceof FluxServiceError ? e.kind : '');
       setError(controller.signal.aborted ? 'The free GPU service took too long to respond. Please try later; your original photo is still here.' : e instanceof Error ? e.message : 'The edit could not finish. Please try again later.');
     } finally { clearTimeout(timer); currentJob.current = null; setBusy(false); }
   }
@@ -136,7 +140,7 @@ export default function Home() {
           </div></div>
           <div className="photo-footer"><span className="filename">{name}<small>{dimensions.w} × {dimensions.h}{result ? ' · PNG export' : ''}</small></span>{result ? <div className="result-actions"><Button variant="outline" onClick={() => setOriginalView(!originalView)}>{originalView ? 'Show result' : 'See original'}</Button><a className="download-button" href={result} download="cash-crates.png"><ArrowDownToLine size={17} />Download PNG</a></div> : <span className="canvas-hint"><Move size={14} />Drag to position · Arrow keys to fine-tune</span>}</div>
           {busy && <p role="status" className="progress-message">{status}</p>}
-          {error && <div role="alert" className="error-message"><strong>The edit needs a moment.</strong><p>{error}</p><a href="https://huggingface.co/spaces/black-forest-labs/FLUX.1-Fill-dev" target="_blank" rel="noreferrer">Check the free model<ArrowUpRight size={14} /></a></div>}
+          {error && <div role="alert" className="error-message"><strong>{errorKind === 'quota' ? 'Daily free allowance used' : 'Unable to finish the edit'}</strong><p>{error}</p><a href="https://huggingface.co/spaces/black-forest-labs/FLUX.1-Fill-dev" target="_blank" rel="noreferrer">{errorKind === 'quota' ? 'Open the free service / sign in' : 'Check the free model'}<ArrowUpRight size={14} /></a></div>}
           {result && !busy && <p role="status" className="success-message"><Check size={16} />Ready. Pixels outside the edit mask are preserved from your original.</p>}
         </div>
       </section>

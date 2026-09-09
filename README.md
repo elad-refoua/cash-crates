@@ -38,3 +38,10 @@ Person detection: [Google MediaPipe](https://github.com/google-ai-edge/mediapipe
 ## Verification (2026-09-09)
 
 The interface was loaded in Chrome and real, unauthenticated model generation was exercised. The sample image was uploaded through the browser file picker after file access was enabled for the test extension. The model produced a new image; the download saved a PNG at the original dimensions. Desktop and mobile checks accompany deployment. These checks establish a working integration, not guaranteed availability of the third-party free GPU service.
+
+### Quota diagnosis and repair (2026-09-09)
+
+The provider's full queue response confirmed that the anonymous ZeroGPU runs limit was exhausted. The simplified Gradio call endpoint reduced that error to an empty payload. The editor now uses the queue API, reports the actual quota error and queue position, and distinguishes unknown failures from confirmed limits. Five protocol regression tests use the captured quota response and cover success, queue status, and split event frames. No quota reset time is invented and no quota bypass is attempted.
+
+Run protocol tests with: node --experimental-strip-types --test tests/flux-protocol.test.mjs
+

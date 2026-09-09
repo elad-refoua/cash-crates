@@ -94,16 +94,9 @@ export function composite(original: HTMLImageElement, generated: HTMLImageElemen
 
 async function checked(response: Response) {
   if (response.ok) return response;
-  if (response.status === 429) throw new Error('The free GPU quota is currently exhausted. Please try again after it resets. There is no charge.');
+  if (response.status === 429) throw new FluxServiceError('busy', 'The AI service is limiting requests right now. Please wait before trying again.');
   if (response.status === 401 || response.status === 403) throw new Error('The free AI service is not accepting this request right now. Please try later, or open the model page below.');
   throw new Error(`The free AI service is temporarily unavailable (${response.status}). Please try again later.`);
-}
-
-function generationError(value: unknown) {
-  const detail = typeof value === 'string' ? value : value && typeof value === 'object' && 'error' in value ? String(value.error) : '';
-  if (/quota|exceeded|GPU.*limit/i.test(detail)) return new Error('Your free GPU allowance has been used. Please try again after the daily quota resets. You will not be charged.');
-  if (/queue|busy/i.test(detail)) return new Error('The free GPU queue is full. Please try again in a few minutes.');
-  return new Error(detail ? `The model could not finish: ${detail.slice(0, 240)}` : 'The free model could not complete this edit. It may be busy or out of free GPU capacity. Please try again later.');
 }
 
 export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasElement, amount: string, signal: AbortSignal, onStatus: (text: string) => void) {
@@ -116,29 +109,30 @@ export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasE
   if (!Array.isArray(paths) || paths.length !== 2 || paths.some(p => typeof p !== 'string')) throw new Error('The service did not accept the photo. Please try again.');
   const file = (path: string) => ({ path, meta: { _type: 'gradio.FileData' } });
   const prompt = `A realistic photograph of ${amount === 'lots' ? 'three' : 'two'} open-top wooden storage crates on the floor. The crates are filled with dozens of small stacks of dollar bills, each stack tied with a paper band. Looking into the open tops, many separate bundles of cash are clearly visible. Plain brown wooden sides with natural wood grain. The crates stand beside the person. Matching perspective, natural lighting and floor shadows.`;
-  const submitted = await checked(await fetch(`${SPACE}/gradio_api/call/infer`, {
+  const config = await (await checked(await fetch(`${SPACE}/config`, { signal }))).json() as { dependencies?: { id: number; api_name?: string }[] };
+  const endpoint = config.dependencies?.find(item => item.api_name === 'infer');
+  if (!endpoint) throw new Error('The free model’s API has changed. This connection needs an update.');
+  const sessionHash = crypto.randomUUID().replaceAll('-', '');
+  const submitted = await checked(await fetch(`${SPACE}/gradio_api/queue/join`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-    body: JSON.stringify({ data: [{ background: file(paths[0]), layers: [file(paths[1])], composite: file(paths[0]) }, prompt, Math.floor(Math.random() * 2147483647), false, 1024, 1024, 30, 28] }),
+    body: JSON.stringify({ data: [{ background: file(paths[0]), layers: [file(paths[1])], composite: file(paths[0]) }, prompt, Math.floor(Math.random() * 2147483647), false, 1024, 1024, 30, 28], fn_index: endpoint.id, session_hash: sessionHash }),
   }));
   const event = await submitted.json() as { event_id?: string };
   if (!event.event_id || !/^[a-zA-Z0-9_-]+$/.test(event.event_id)) throw new Error('The service did not start the edit. Please try again later.');
-  onStatus('Waiting for a free GPU and generating your crates…');
-  const stream = await checked(await fetch(`${SPACE}/gradio_api/call/infer/${event.event_id}`, { signal }));
+  onStatus('Joining the free GPU queue…');
+  const stream = await checked(await fetch(`${SPACE}/gradio_api/queue/data?session_hash=${sessionHash}`, { signal }));
   if (!stream.body) throw new Error('The connection was interrupted. Please try again.');
-  const reader = stream.body.getReader(), decoder = new TextDecoder(); let buffer = '';
+  const reader = stream.body.getReader(), decoder = new TextDecoder(), parse = createEventParser();
   try {
     while (true) {
       const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
-      let boundary: number;
-      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-        const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
-        const type = block.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim();
-        const raw = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-        if (type === 'error') { let detail; try { detail = JSON.parse(raw); } catch { detail = raw; } throw generationError(detail); }
-        if (type === 'complete') {
-          const data = JSON.parse(raw) as [{ url?: string }];
-          const url = data?.[0]?.url;
+      for (const message of parse(decoder.decode(value, { stream: !done }))) {
+        if (message.event_id && message.event_id !== event.event_id) continue;
+        const state = interpretQueueMessage(message);
+        if (state.type === 'status') onStatus(state.message);
+        if (state.type === 'error') throw new FluxServiceError(state.kind, state.message);
+        if (state.type === 'result') {
+          const url = state.url;
           if (!url || new URL(url).origin !== SPACE) throw new Error('The model returned an unexpected image response.');
           onStatus('Restoring the protected pixels and preparing your download…');
           const response = await checked(await fetch(url, { signal }));
@@ -150,3 +144,4 @@ export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasE
     throw new Error('The connection ended before the edit finished. Please try again later.');
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
+import { createEventParser, FluxServiceError, interpretQueueMessage } from './flux-protocol';
