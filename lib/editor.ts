@@ -1,6 +1,5 @@
 export type Area = { x: number; y: number; width: number; height: number };
 export type Protection = { values: Float32Array; width: number; height: number };
-export const SPACE = 'https://black-forest-labs-flux-1-fill-dev.hf.space';
 export const DEFAULT_AREA: Area = { x: 0.65, y: 0.47, width: 0.32, height: 0.48 };
 
 export function canvas(width: number, height: number) {
@@ -100,27 +99,25 @@ async function checked(response: Response) {
 }
 
 export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasElement, amount: string, signal: AbortSignal, onStatus: (text: string) => void) {
+  const client = createHuggingFaceClient();
   const input = canvas(mask.width, mask.height); input.getContext('2d')!.drawImage(original, 0, 0, input.width, input.height);
   onStatus('Sending your photo to the free AI service…');
   const form = new FormData();
   form.append('files', await toBlob(input), 'photo.png'); form.append('files', await toBlob(mask), 'edit-area.png');
-  const upload = await checked(await fetch(`${SPACE}/gradio_api/upload`, { method: 'POST', body: form, signal }));
+  const upload = await checked(await client.upload(form, signal));
   const paths = await upload.json() as string[];
   if (!Array.isArray(paths) || paths.length !== 2 || paths.some(p => typeof p !== 'string')) throw new Error('The service did not accept the photo. Please try again.');
   const file = (path: string) => ({ path, meta: { _type: 'gradio.FileData' } });
   const prompt = `A realistic photograph of ${amount === 'lots' ? 'three' : 'two'} open-top wooden storage crates on the floor. The crates are filled with dozens of small stacks of dollar bills, each stack tied with a paper band. Looking into the open tops, many separate bundles of cash are clearly visible. Plain brown wooden sides with natural wood grain. The crates stand beside the person. Matching perspective, natural lighting and floor shadows.`;
-  const config = await (await checked(await fetch(`${SPACE}/config`, { signal }))).json() as { dependencies?: { id: number; api_name?: string }[] };
+  const config = await (await checked(await client.config(signal))).json() as { dependencies?: { id: number; api_name?: string }[] };
   const endpoint = config.dependencies?.find(item => item.api_name === 'infer');
   if (!endpoint) throw new Error('The free model’s API has changed. This connection needs an update.');
   const sessionHash = crypto.randomUUID().replaceAll('-', '');
-  const submitted = await checked(await fetch(`${SPACE}/gradio_api/queue/join`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-    body: JSON.stringify({ data: [{ background: file(paths[0]), layers: [file(paths[1])], composite: file(paths[0]) }, prompt, Math.floor(Math.random() * 2147483647), false, 1024, 1024, 30, 28], fn_index: endpoint.id, session_hash: sessionHash }),
-  }));
+  const submitted = await checked(await client.join({ data: [{ background: file(paths[0]), layers: [file(paths[1])], composite: file(paths[0]) }, prompt, Math.floor(Math.random() * 2147483647), false, 1024, 1024, 30, 28], fn_index: endpoint.id, session_hash: sessionHash }, signal));
   const event = await submitted.json() as { event_id?: string };
   if (!event.event_id || !/^[a-zA-Z0-9_-]+$/.test(event.event_id)) throw new Error('The service did not start the edit. Please try again later.');
   onStatus('Joining the free GPU queue…');
-  const stream = await checked(await fetch(`${SPACE}/gradio_api/queue/data?session_hash=${sessionHash}`, { signal }));
+  const stream = await checked(await client.stream(sessionHash, signal));
   if (!stream.body) throw new Error('The connection was interrupted. Please try again.');
   const reader = stream.body.getReader(), decoder = new TextDecoder(), parse = createEventParser();
   try {
@@ -133,9 +130,9 @@ export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasE
         if (state.type === 'error') throw new FluxServiceError(state.kind, state.message);
         if (state.type === 'result') {
           const url = state.url;
-          if (!url || new URL(url).origin !== SPACE) throw new Error('The model returned an unexpected image response.');
+          if (!url) throw new Error('The model returned an unexpected image response.');
           onStatus('Restoring the protected pixels and preparing your download…');
-          const response = await checked(await fetch(url, { signal }));
+          const response = await checked(await client.file(url, signal));
           return response.blob();
         }
       }
@@ -145,3 +142,4 @@ export async function generateCash(original: HTMLImageElement, mask: HTMLCanvasE
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 import { createEventParser, FluxServiceError, interpretQueueMessage } from './flux-protocol';
+import { createHuggingFaceClient } from './hugging-face-client';
