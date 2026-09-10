@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local development, then enter a non-production test token locally.
+HF_TOKEN=

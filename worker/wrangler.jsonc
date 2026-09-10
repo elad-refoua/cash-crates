@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cash-crates-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-10",
+  "vars": {
+    "ALLOWED_ORIGIN": "https://elad-refoua.github.io"
+  }
+}
